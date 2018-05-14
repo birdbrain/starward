@@ -1,8 +1,9 @@
 import moment from 'moment';
+import { createRedisClient, redisConfig } from '../redis';
+import { cachedApi } from '../redis/cachedGet';
+import { submitForm } from './gravitySubmit';
 import { appSettings, gravityForms, wp } from '../../graphQL';
 import { serversideStateCharacterBlacklistRegex, WP_URL, REDIS_PREFIX } from '../config/app';
-import { createRedisClient } from '../redis';
-import { submitForm } from './gravitySubmit';
 
 /* ----------- App API Helpers ----------- */
 const client = createRedisClient(REDIS_PREFIX);
@@ -10,7 +11,7 @@ const client = createRedisClient(REDIS_PREFIX);
 /* Removes illegal characters from WP API */
 /* Checks for WP_URL in response and replaces it with the base url */
 /* Reinstates correct wp-content links within response */
-const sanitizeJSON = (json) => {
+const sanitizeJSONCurry = ({returnJson}) => (json) => {
   const stringified = JSON.stringify(json);
   const wpUrlRegex = new RegExp(WP_URL, 'g');
   const wpContentUrlRegex = new RegExp('/wp-content', 'g');
@@ -18,24 +19,34 @@ const sanitizeJSON = (json) => {
   .replace(serversideStateCharacterBlacklistRegex, '')
   .replace(wpUrlRegex, '')
   .replace(wpContentUrlRegex, `${WP_URL}/wp-content`);
-  return JSON.parse(cleaned);
+  return returnJson ? JSON.parse(cleaned) : cleaned;
 };
-/* Handle success and sanitize JSON response */
-const handleSuccess = (res) => {
-  return (data) => res.json(sanitizeJSON(data));
+
+const sanitizeJSONasString = sanitizeJSONCurry({returnJson: false});
+
+const handleCachedSuccess = ({sanitizedData, res}) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(sanitizedData);
 };
-/* Handle error */
-const handleError = (res) => {
-  return (error) => res.json(error);
+
+const handleCachedError = ({res, error}) => {
+  res.json(error);
 };
+
+const cachedApiInstance = cachedApi({
+  expiry: redisConfig.redisLongExpiry,
+  redisCache: client,
+  sanitizeJSON: sanitizeJSONasString,
+});
 
 /* ----------- Express ----------- */
 
 export default(app) => {
+  const appCached = cachedApiInstance({app});
   /* ----------- App API Routes ----------- */
   /* Get Site Name and Description */
   /* Does not require a query param */
-  app.get('/api/settings', (req, res) => {
+  appCached.get('/api/settings', (req, res) =>
     appSettings(`
       query{
         settings{
@@ -51,13 +62,11 @@ export default(app) => {
           additionalScripts
         }
       }
-    `)
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+    `), handleCachedSuccess, handleCachedError);
+
   /* Get Menu */
   /* Expects query param ?name= (?name=Header) */
-  app.get('/api/menu', (req, res) => {
+  appCached.get('/api/menu', (req, res) =>
     appSettings(`
       query get_menu($name: String) {
         menu(name: $name) {
@@ -72,14 +81,12 @@ export default(app) => {
             classes
           }
         }
-      }`, {name: req.query.name})
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+      }`, {name: req.query.name}), handleCachedSuccess, handleCachedError);
+
   /* ----------- Wordpress API Routes ----------- */
   /* Get Page */
   /* Expects query param ?slug= */
-  app.get('/api/page', (req, res) => {
+  appCached.get('/api/page', (req, res) =>
     wp(`
       query get_page($slug: String, $preview: Int) {
         active_page: page(slug: $slug, preview: $preview) {
@@ -95,13 +102,11 @@ export default(app) => {
           acf,
           seo: yoast
         }
-      }`, {slug: req.query.slug, preview: req.query.preview})
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+      }`, {slug: req.query.slug, preview: req.query.preview}), handleCachedSuccess, handleCachedError);
+
   /* Get Collection of Posts */
   /* Expects query param ?page= */
-  app.get('/api/posts', (req, res) => {
+  appCached.get('/api/posts', (req, res) =>
     wp(`
       query get_posts($page: Int, $perPage: Int) {
         posts(page: $page, perPage: $perPage) {
@@ -133,13 +138,11 @@ export default(app) => {
           totalItems,
           totalPages
         }
-      }`, {page: req.query.page, perPage: req.query.perPage})
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+      }`, {page: req.query.page, perPage: req.query.perPage}), handleCachedSuccess, handleCachedError);
+
   /* Get Individual Post */
   /* Expects query param ?slug= */
-  app.get('/api/post', (req, res) => {
+  appCached.get('/api/post', (req, res) =>
     wp(`
       query get_post($slug: String, $preview: Int) {
         activePost: post(slug: $slug, preview: $preview){
@@ -186,13 +189,11 @@ export default(app) => {
             avatar
           }
         }
-      }`, {slug: req.query.slug, preview: req.query.preview})
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+      }`, {slug: req.query.slug, preview: req.query.preview}), handleCachedSuccess, handleCachedError);
+
   /* Get Category and Collection of Posts */
   /* Expects query param ?slug= && ?page= */
-  app.get('/api/category', (req, res) => {
+  appCached.get('/api/category', (req, res) =>
     wp(`
       query get_category($slug: String, $page: Int) {
         category(slug: $slug) {
@@ -226,13 +227,11 @@ export default(app) => {
             totalPages
           }
         }
-      }`, {slug: req.query.slug, page: req.query.page})
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+      }`, {slug: req.query.slug, page: req.query.page}), handleCachedSuccess, handleCachedError);
+
   /* Get Author and Collection of Posts */
   /* Expects query param ?name && ?page= */
-  app.get('/api/author', (req, res) => {
+  appCached.get('/api/author', (req, res) =>
     wp(`
       query get_author($name: String, $page: Int) {
         author(name: $name) {
@@ -265,13 +264,11 @@ export default(app) => {
             totalPages
           }
         }
-      }`, {name: req.query.name, page: req.query.page})
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+      }`, {name: req.query.name, page: req.query.page}), handleCachedSuccess, handleCachedError);
+
   /* Perform search and return results */
   /* Expects query param ?term= (OPTIONAL = ?type= && ?page= && ?perPage=) */
-  app.get('/api/search', (req, res) => {
+  appCached.get('/api/search', (req, res) =>
     wp(`
       query search($term: String, $type: String, $page: Int, $perPage: Int) {
         search(term: $term, type: $type, page: $page, perPage: $perPage) {
@@ -298,13 +295,12 @@ export default(app) => {
           totalPages
         }
       }`, {term: req.query.term, type: req.query.type, page: req.query.page, perPage: req.query.perPage})
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+        , handleCachedSuccess, handleCachedError);
+
   /* ----------- Gravity Forms Endpoints ----------- */
   /* Get Gravity Form */
   /* Expects query param ?id= */
-  app.get('/api/gravityforms', (req, res) => {
+  appCached.get('/api/gravityforms', (req, res) =>
     gravityForms(`
       query get_form($id: Int) {
         form(id: $id) {
@@ -324,14 +320,12 @@ export default(app) => {
             choices
           }
         }
-      }`, {id: req.query.id})
-      .then(handleSuccess(res))
-      .catch(handleError(res));
-  });
+      }`, {id: req.query.id}), handleCachedSuccess, handleCachedError);
 
   app.post('/api/gravityforms', (req, res) => {
     return submitForm(req, res);
   });
+
   /* ----------- Redis Endpoints ----------- */
   /* Flush Redis */
   app.get('/api/flushredis', (req, res) => {
