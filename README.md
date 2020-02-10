@@ -164,3 +164,9 @@ Pulls data from a [custom option page](https://www.advancedcustomfields.com/reso
 `GET: api/gravityforms?id=*`
 
 *Please note submitting the Gravity Form is handled by a direct API post request to the WP GF API v2 service inside an action, please view app/actions/gravityforms.js*
+
+## FAQ / Troubleshooting
+
+### I've made a change to WP back end, but my front-end is not updating.
+
+You need to flush the REDIS cache. This can be done by navigating to `<yourdomain>/api/flushredis`. Once this is done, clear any other cache plugins on the website and hard refresh. You should see your changes reflected on the front-end.
